@@ -3,7 +3,10 @@ package consulkv
 import (
 	"bytes"
 	crand "crypto/rand"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"path"
 	"testing"
 	"time"
@@ -263,4 +266,154 @@ func TestClient_WatchList(t *testing.T) {
 		t.Fatalf("unexpected value: %#v", meta2)
 	}
 
+}
+
+func TestClient_AcquireRelease(t *testing.T) {
+	client := testClient(t)
+
+	session, err := client.createSession()
+	if err != nil {
+		t.Fatalf("failed to create session: %#v", err)
+	}
+
+	key := testKey()
+	value := []byte("test")
+
+	defer func() {
+		client.destroySession(session)
+		client.Delete(key)
+	}()
+
+	for i := uint64(1); i <= 5; i++ {
+		flags := i * 42
+		// acquire
+		ok, err := client.Acquire(key, value, flags, session)
+		if err != nil {
+			t.Errorf("err: %v", err)
+			return
+		}
+		if !ok {
+			t.Error("failed to acquire lock")
+			return
+		}
+		// confirm value
+		meta, pair, err := client.Get(key)
+		if err != nil {
+			t.Errorf("err: %v", err)
+			return
+		}
+		if meta == nil {
+			t.Errorf("unexpected value: %#v", pair)
+			return
+		}
+		if pair == nil {
+			t.Errorf("unexpected value: %v", pair)
+			return
+		}
+		if !bytes.Equal(pair.Value, value) {
+			t.Errorf("unexpected value: %#v", pair)
+			return
+		}
+		if pair.LockIndex != i {
+			t.Errorf("unexpected value: %v", pair)
+			return
+		}
+		if pair.Flags != flags {
+			t.Errorf("unexpected value: %#v", pair)
+			return
+		}
+		// release
+		ok, err = client.Release(key, session)
+		if err != nil {
+			t.Errorf("err: %v", err)
+			return
+		}
+		if !ok {
+			t.Error("failed to release lock")
+			return
+		}
+		// confirm value
+		meta, pair, err = client.Get(key)
+		if err != nil {
+			t.Errorf("err: %v", err)
+			return
+		}
+		if meta == nil {
+			t.Errorf("unexpected value: %#v", pair)
+			return
+		}
+		if pair == nil {
+			t.Errorf("unexpected value: %v", pair)
+			return
+		}
+		if pair.Value != nil {
+			t.Errorf("unexpected value: %#v", pair)
+			return
+		}
+		if pair.LockIndex != i {
+			t.Errorf("unexpected value: %v", pair)
+			return
+		}
+		if pair.Flags != 0 {
+			t.Errorf("unexpected value: %#v", pair)
+			return
+		}
+	}
+}
+
+func (c *Client) createSession() (string, error) {
+	url := &url.URL{
+		Scheme: "http",
+		Host:   c.config.Address,
+		Path:   "/v1/session/create",
+	}
+	if c.config.Datacenter != "" {
+		query := url.Query()
+		query.Set("dc", c.config.Datacenter)
+		url.RawQuery = query.Encode()
+	}
+	req := http.Request{
+		Method: "PUT",
+		URL:    url,
+	}
+	resp, err := c.config.HTTPClient.Do(&req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("Unexpected response code: %d", resp.StatusCode)
+	}
+	dec := json.NewDecoder(resp.Body)
+	var out struct{ ID string }
+	if err := dec.Decode(&out); err != nil {
+		return "", err
+	}
+	return out.ID, nil
+}
+
+func (c *Client) destroySession(session string) error {
+	url := &url.URL{
+		Scheme: "http",
+		Host:   c.config.Address,
+		Path:   path.Join("/v1/session/destroy/", session),
+	}
+	if c.config.Datacenter != "" {
+		query := url.Query()
+		query.Set("dc", c.config.Datacenter)
+		url.RawQuery = query.Encode()
+	}
+	req := http.Request{
+		Method: "PUT",
+		URL:    url,
+	}
+	resp, err := c.config.HTTPClient.Do(&req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("Unexpected response code: %d", resp.StatusCode)
+	}
+	return nil
 }

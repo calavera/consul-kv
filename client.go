@@ -41,8 +41,10 @@ type KVPair struct {
 	Key         string
 	CreateIndex uint64
 	ModifyIndex uint64
+	LockIndex   uint64
 	Flags       uint64
 	Value       []byte
+	Session     string
 }
 
 // KVPairs is a list of KVPair objects
@@ -142,21 +144,38 @@ func (c *Client) getRecurse(key string, recurse bool, waitIndex uint64) (*KVMeta
 
 // Put is used to set a value for a given key
 func (c *Client) Put(key string, value []byte, flags uint64) error {
-	_, err := c.putCAS(key, value, flags, 0, false)
+	_, err := c.putCAS(key, value, flags, 0, false, "", false)
 	return err
 }
 
 // CAS is used for a Check-And-Set operation
 func (c *Client) CAS(key string, value []byte, flags, index uint64) (bool, error) {
-	return c.putCAS(key, value, flags, index, true)
+	return c.putCAS(key, value, flags, index, true, "", false)
+}
+
+// Acquire sets a value for a given key and acquires a lock on the key
+func (c *Client) Acquire(key string, value []byte, flags uint64, session string) (bool, error) {
+	return c.putCAS(key, value, flags, 0, false, session, true)
+}
+
+// Release releases a lock on a key
+func (c *Client) Release(key string, session string) (bool, error) {
+	return c.putCAS(key, nil, 0, 0, false, session, false)
 }
 
 // putCAS is used to do a PUT with optional CAS
-func (c *Client) putCAS(key string, value []byte, flags, index uint64, cas bool) (bool, error) {
+func (c *Client) putCAS(key string, value []byte, flags, index uint64, cas bool, session string, acquire bool) (bool, error) {
 	url := c.pathURL(key)
 	query := url.Query()
 	if cas {
 		query.Set("cas", strconv.FormatUint(index, 10))
+	}
+	if session != "" {
+		if acquire {
+			query.Set("acquire", session)
+		} else {
+			query.Set("release", session)
+		}
 	}
 	query.Set("flags", strconv.FormatUint(flags, 10))
 	url.RawQuery = query.Encode()
