@@ -248,7 +248,7 @@ func (c *Client) pathURL(key string) *url.URL {
 	return url
 }
 
-func (c *Client) createSession() (string, error) {
+func (c *Client) CreateSession() (string, error) {
 	url := &url.URL{
 		Scheme: "http",
 		Host:   c.config.Address,
@@ -279,7 +279,7 @@ func (c *Client) createSession() (string, error) {
 	return out.ID, nil
 }
 
-func (c *Client) destroySession(session string) error {
+func (c *Client) DestroySession(session string) error {
 	url := &url.URL{
 		Scheme: "http",
 		Host:   c.config.Address,
